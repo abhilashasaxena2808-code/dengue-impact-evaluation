@@ -1,0 +1,1014 @@
+---
+title: "Mosquito Nets and Dengue Risk"
+author: "Abhilasha Saxena"
+date: "2026-03-29"
+output:
+  pdf_document:
+   latex_engine: xelatex
+ 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Loading necessary libraries
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(stargazer)
+library(dagitty)
+library(ggdag)
+library(ggplot2)
+library(MatchIt)
+library(cobalt)
+library(aod)
+library(AER)
+library(modelsummary)
+```
+
+
+**Part 0-Data Familiarisation**
+(a) Loading the dataset.Making necessary adjustments to income variable and verifying economic sensibility of its range
+```{r load-data}
+# 1. Load the library
+library(readr)
+library(tidyverse)
+# OR if you want to be specific:
+library(dplyr)
+
+# 2. Load the file using just the name
+data_dengue_net_v2 <- read_csv("data_dengue_net_v2.csv")
+# 3 Converting Income Variable to Indian Rupee and verifying correct Income Range
+data_dengue_net_v2 <- data_dengue_net_v2 %>%
+  mutate(income_rupee = income * 10)
+summary(data_dengue_net_v2$income_rupee)
+```
+The 'income' variable has been multiplied by 10 to obtain 'income_rupee' variable. The re-scaled variable gives Household Monthly Income in Indian Rupees. The corrected Income Range from 2570 to 18000 seems economically sensible in the context of the programme. As can be seen from the First Quartile a little more than 25% of the households have Monthly Household Income strictly below 7000 (eligibility criteria). This allows for a clear comparison between eligible low-income households and ineligible higher-income households. 
+
+(b) Constructing Eligibility variable. 
+
+```{r}
+data_dengue_net_v2 <- data_dengue_net_v2 %>%
+  mutate(eligible_HH = household > 4 & income_rupee < 7000)
+# This adds up all the TRUE values
+sum(data_dengue_net_v2$eligible_HH)
+# Answer = 175
+# Returns the proportion 
+share <- mean(data_dengue_net_v2$eligible_HH)
+print(share)
+
+# To see it as a percentage 
+share * 100
+
+summary(data_dengue_net_v2$income_rupee)
+summary(data_dengue_net_v2$household)
+
+```
+The variable 'eligible_HH' has been constructed to verify how many households satisfy the eligibility criteria , i.e, household size > 4 and monthly household income < 7000. The above code gives a value TRUE to the eligible households. Adding up all the TRUE values shows that 175 of 1752 households are eligible for the programme. This represents around 9.98% of the sample. A significant percent of the sample stands eligible for the programme, indicating that its impact can be suitably assessed from the sample.
+
+ **Analysing the Distributions of Monthly Household Income and Household Size**
+ 
+ 1. Monthly Household Income (income_rupee)
+Central Tendency: The average monthly income in the sample is ₹9,193, with a median of ₹8,610. The fact that the mean is slightly higher than the median suggests the income distribution is mildly right-skewed.
+
+Range: Household incomes vary significantly, ranging from a minimum of ₹2,570 to a maximum of ₹18,000.
+
+Interquartile Range (IQR): 50% of the households earn between ₹6,578 (1st Quartile) and ₹11,230 (3rd Quartile). This confirms that the sample represents a diverse economic range, which is critical for analyzing eligibility for the government net programme.
+
+2. Household Size (household)
+Central Tendency: The typical household in the sample consists of approximately 4 members (Mean = 3.991, Median = 4.000).
+
+Range: Household sizes range from 1 member to a maximum of 8 members.
+
+Distribution: Most households (the middle 50%) have between 3 and 5 members. This variable is likely a key determinant of both dengue risk (due to crowding) and programme eligibility.
+ 
+Thus given the distributions of Monthly Household Income and Household size, the eligibility variable seems to be constructed in an economically sensible manner.
+
+(c) Produce a summary statistics table for all key variables, reported separately for net users and 
+non-users. What do you notice? Do net users look systematically different from non-users on 
+observable characteristics? Why does this pattern matter for the analysis that follows?
+
+We first create a new variable 'net' for Net Use that takes a value 1 when a household uses 1 or more nets and 0 otherwise. 
+
+```{r}
+# net = 1 if net_num >= 1, otherwise 0
+data_dengue_net_v2 <- data_dengue_net_v2 %>%
+  mutate(net = if_else(net_num >= 1, 1, 0))
+
+install.packages("stargazer")
+library(stargazer)
+
+# Filter for net users and show summary stats for key variables
+net_users_data <- data_dengue_net_v2 %>% 
+  filter(net == 1) %>% 
+  select(net_num, dengue_risk, income, health, household, temperature, resistance, rainfall, income_rupee)
+
+stargazer(as.data.frame(net_users_data), type = "text", title = " Table 1: Summary Statistics: Net Users")
+
+
+# Filter for non users and show summary stats for key variables
+non_users_data <- data_dengue_net_v2 %>% 
+  filter(net == 0) %>% 
+  select(net_num, dengue_risk, income, health, household, temperature, resistance, rainfall, income_rupee)
+
+stargazer(as.data.frame(non_users_data), type = "text", title = " Table 2: Summary Statistics: Non Users")
+
+```
+From the above Summary Statistics, Net Users and Non Users seem to systematically vary on terms of dengue risk, monthly household income (income_rupee), health and household. Difference in terms of temperature, resistance and rainfall seems negligible.
+
+1) Dengue Risk
+The mean dengue risk among Net Users (22.458) is much lower than that of Non Users (40.920). While this difference might suggest that Net Use lowers dengue risk, this finding is not purely causal to due presence of other key variables like income_rupee, health and household on which Net Users and Non users systematically vary. These key variables could be possible confounders. 
+
+2)  Monthly Household Income,Health and Household Size
+Net Users seem to be richer with average income of 10,388.440 as opposed to Non Users with average income 8,184.526, and even healthier with mean health 55.544 as opposed to Non users with mean health 47.197. Net-using households are slightly larger on average (4.31 members) than non-using households (3.72 members).
+
+3) Temperature, Resistance and Rainfall
+They seem to be nearly identical across both groups. This suggests that environmental conditions are exogenous to the household's decision to use a net in this sample.
+
+```{r}
+install.packages("ggplot2")
+library(ggplot2)
+ggplot(data_dengue_net_v2, aes(x = dengue_risk, fill = as.factor(net))) +
+  geom_density(alpha = 0.4) + # Sets transparency so you can see overlapping areas
+  labs(
+    title = "Distribution of Dengue Risk by Number of Nets Owned",
+    x = "Dengue Risk Score",
+    y = "Density",
+    fill = "Net"
+  ) +
+  theme_minimal()
+
+
+```
+The density plot of Dengue Risk also similarly suggests that Dengue risk is higher for Non users than for Net Users. A significant portion of the density plot of Non users lies towards the right of Net Users. While this difference might suggest that Net Use lowers dengue risk, this finding is not purely causal to due presence of other key variables like income_rupee, health and household on which Net Users and Non users systematically vary.
+
+Hence, it is clear that the wealthier, healthier, and households with more members are more likely to use nets resulting in the problem of Selection Bias. Presence of Selection Bias makes it difficult to estimate the ATE using SDO (Simple Difference in Outcomes). This results in Low Internal Validity as our results become contaminated due to the presence of possible confounders.
+
+**Part 1 - Causal Framework**
+
+(a) Research Question : Does using Mosquito Nets causally lower Households' Risk of contracting Dengue Fever in the targeted region?
+
+Targeted Estimand : Average Treatment Effect (ATE) : This is the average effect of using a mosquito net for a household randomly drawn from the entire population. For a public health intervention available to all households, the natural estimand is the Average Treatment Effect (ATE). It tells us what we would expect to happen to dengue risk if we moved any randomly selected household from Non-User to Net-User. The ATT (Average Treatment Effect on the Treated) would only tell us the effect for households that already chose to use nets, which has less policy relevance if we want to design a universally targeted programme. The ATU is relevant only for the untreated subgroup. In a setting where programme expansion to new adopters is the goal, the ATE is the most policy-relevant estimand. ATE, ATT, ATU are not equal in the case of heterogeneous treatment effects. 
+
+We note that it matters whether treatment is defined as binary (net: 1/0) or as a count (net_num: 0–3). Both of them measure different aspects.
+
+Net Use (Binary Variable) : It should be used when we ask if there is any benefit of using a net to lower dengue risk (i.e benefit of using a net vs none.)
+
+Number of Nets (Count Variable): It should be used when we wish to find by how much can each additional net lower the risk of contracting dengue. Moreover, the effect of the first net is not expected to be equal to the effect of each additional net. Diminishing Marginal returns are likely to be expected. The first net provides the most significant drop in risk because it protects the most vulnerable members or the primary sleeping area.
+The second and third nets likely reduce risk further, but the marginal (extra) benefit of the third net is usually smaller than the first.
+
+A. For Regression and Matching
+Choice: Net Use seems more appropriate here.
+
+Why: Matching methods (like Propensity Score Matching) are designed to compare "Treated" vs. "Untreated" groups. It is mathematically cleaner to match a household with a net to a "twin" household without a net. Using a count variable in matching is much more complex.
+
+B. For IV Analysis 
+Choice: Net Use makes more sense as the endogenous variable.
+
+Why: We use Programme Eligibility (eligible_HH) as our Instrument. The government policy typically dictates whether a household receives the net (the "binary" shock).
+
+The 2SRI/2SLS logic relies on the instrument being a strong predictor of the treatment. Eligibility is a very strong predictor of whether we get any nets, but it may not precisely predict whether a family chooses to use exactly 2 vs 3 nets if they already have them. Therefore, the binary Net Use variable usually satisfies the Relevance Assumption more cleanly.
+
+**(b)The DAG representing the Causal Structure**
+
+```{r}
+install.packages("dagitty")
+install.packages("ggdag")
+# 1. Load the necessary libraries
+library(dagitty)
+library(ggdag)
+library(ggplot2)
+
+# 2. Define the DAG structure with specific coordinates (x, y)
+# Layout description:
+# Eligibility (Instrument): Left of Net (x=1)
+# Net (Treatment): Mid-Left (x=2)
+# Dengue Risk (Outcome): Mid-Right (x=3)
+# Environmental Variables: Right of Dengue Risk (x=4)
+# Confounders (Income, Size, Health): Stacked Below Net/Risk (y=-1, -1.5, -2)
+
+
+# 1. Adjusted coordinates to include the mediator (net_num)
+# Eligibility(1) -> Net(2) -> Net_Num(3) -> Dengue(4) -> Env(5)
+# Confounders stay at x=2.5 to block paths to both Net and Net_Num
+clean_coords_v2 <- list(
+  x = c(eligible_HH = 1, net = 2, net_num = 3, dengue_risk = 4, 
+        income_rupee = 2.5, household = 2.5, health = 2.5,
+        temperature = 5, rainfall = 5, resistance = 5),
+  y = c(eligible_HH = 0, net = 0, net_num = 0, dengue_risk = 0, 
+        income_rupee = -1, household = -1.5, health = -2, 
+        temperature = 0.5, rainfall = 0, resistance = -0.5)
+)
+
+# 2. Define the DAG with the mediator
+mosquito_dag_med <- dagify(
+  dengue_risk ~ net_num + income_rupee + household + health + temperature + rainfall + resistance,
+  net_num ~ net + income_rupee + household + health,
+  net ~ eligible_HH + income_rupee + household + health,
+  eligible_HH ~ income_rupee + household,
+  exposure = "net",
+  outcome = "dengue_risk",
+  coords = clean_coords_v2,
+  labels = c(
+    "net" = "Net Use (D)",
+    "net_num" = "Number of Nets",
+    "dengue_risk" = "Dengue Risk (Y)",
+    "income_rupee" = "Income",
+    "household" = "HH Size",
+    "health" = "Health",
+    "eligible_HH" = "Eligibility (Z)",
+    "temperature" = "Temp",
+    "rainfall" = "Rain",
+    "resistance" = "Resistance"
+  )
+)
+
+# 3. Plot with Single Labels, Blue Nodes, and Black Arrows
+ggdag(mosquito_dag_med, text = FALSE, node_size = 14) +
+  theme_dag() +
+  geom_dag_edges(
+    edge_color = "black", 
+    edge_width = 0.7,
+    arrow_directed = grid::arrow(length = grid::unit(10, "pt"), type = "closed")
+  ) +
+  geom_dag_node(color = "#3498db") +
+  # Single label layer
+  geom_dag_label(aes(label = label), 
+                 fill = "white", 
+                 label.size = 0, 
+                 nudge_y = 0.25, 
+                 fontface = "bold", 
+                 size = 2.8) +
+  expand_limits(x = c(0.5, 5.5), y = c(-2.8, 1)) +
+  labs(title = "Causal Directed Acyclic Graph with Mediator",
+       subtitle = "Path: Eligibility -> Net Use -> Number of Nets -> Dengue Risk") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+Treatment Variable : Net Use
+Outcome Variable : Dengue Risk
+
+**Confounders**
+Confounders open Backdoor Paths that are not Causal. These create spuriuos correlations between D and Y. The idea of Confounders is similar to the notion of Omitted Variable Bias in that it represents a variable that determines both the Outcome (Y) as well as the Treatment (D). Just as not controlling for a variable like that in a regression creates Omitted Variable Bias, leaving a backdoor open creates Bias. Such variables confound our ability to discern the effect of D on Y in naive comparisons, making it important to control for them/ close the backdoor paths.
+
+1. Monthly Household Income(income_rupee)
+(a) Effect on Net Use (D): Wealthier households have higher disposable income, making them more likely to purchase high-quality nets.
+
+Effect on Dengue Risk (Y): Wealthier families often live in houses with screened windows, better drainage (reducing mosquito breeding sites), and better access to preventive healthcare, all of which independently lower dengue risk.
+
+The Bias: Without controlling for income, the overall effect would look larger than it actually is because it would be capturing the benefits of living in a "richer," safer house.
+
+2. Household Size (household)
+
+Effect on Net Use (D): Larger households may have a higher demand for nets to protect all members, or conversely, they may find it harder to ensure everyone is covered, influencing the probability of consistent net use.
+
+Effect on Dengue Risk (Y): Dengue is a communicable vector-borne disease. Higher household density (more people in one space) increases the number of potential hosts for a mosquito to bite, effectively increasing the transmission rate within that specific home.
+
+The Bias: If you don't control for size, you might incorrectly conclude that nets are less effective simply because they are being used in crowded, high-risk environments.
+
+3.Health (health)
+
+Effect on Net Use (D): Households that are already health-conscious are systematically more likely to adopt preventive behaviors like using mosquito nets.
+
+Effect on Dengue Risk (Y): A household with a higher baseline health score likely has better nutritional status and stronger immune systems and hence lesser risk of contracting dengue.
+
+The Bias: If omitted, the net will appear to "cause" lower dengue risk, when in reality, it was the "already healthy" people who chose to use the net in the first place.
+
+For similar reasons more income, bigger household size and better health score also increase the number of nets used.
+
+**Environmental Variables**
+
+Rainfall: Creates stagnant water pools, which are the essential breeding grounds for mosquitoes. Higher rainfall typically leads to a higher density of mosquitoes ($Y \uparrow$).
+
+Temperature: Higher temperatures accelerate the metabolic rate of mosquitoes and the replication of the dengue virus within them. This makes each mosquito more "infectious" ($Y \uparrow$).
+
+Resistance: This measures the mosquitoes' biological immunity to common insecticides. If resistance is high, standard fogging by the city fails, and the risk to the household increases ($Y \uparrow$).
+
+These variables are not confounders as they do not affect Household choice of buying a net or not. Most households do not observe daily fluctuations in "mosquito resistance" or "temperature" or "rainfall" before deciding to purchase a net.
+
+If left uncontrolled, our estimate for net would still technically be unbiased , but it would be "noisy".Controlling for them reduces the standard error of the regression, making the coefficient of net more precise leading to smaller standard errors and higher statistical significance.
+
+These results are a replication of the summary statistics of Net Users and Non-Users which helped us conclude that the wealthier, healthier, and households with more members are more likely to use nets. Temperature, Resistance, Rainfall are almost identical across both groups.
+
+**Eligibility (eligible_HH)**
+
+The Eligibility variable has been created using restrictions on Monthly Household Income and Household Size. 
+It is a policy shock that determines Net Use. Crucially, it only affects Dengue Risk through the use of a net (the Exclusion Restriction).
+
+**Number of Nets (net_num)**
+This variable lies on the causal pathway and hence acts as a mediator.
+
+**Variables not to be Controlled**
+
+1) Number Of Nets : It does not make sense to control for such a variable (mediator). If we control for the number of nets while trying to estimate the effect of the "decision to use a net," we will "block" the very mechanism you are trying to study. It can also result in multicollinearity as Net Use and and Number of Nets tend to be related.
+
+2) Eligibility : It is an Intrument, not a confounder. Controlling for a predictor of treatment that is not a cause of the outcome can actually increase the variance (standard errors) of our estimate without reducing bias.
+
+**Minimum Sufficient Adjustment Set = {income_rupee, health, household}**
+It is the smallest set of variables we must condition on to identify the causal effect of net use on dengue risk. As explained above, this set includes all confounders to get causal estimates (Conditional Independance Assumption) - Monthly Household Income, Health, Household Size. The estimates are biased if these are left uncontrolled for.
+It is not necessary to include the environmental variables as our estimates would still remain unbiased if these are left uncontrolled. Number of Nets and Eligibility have to be left uncontrolled for as explained above.
+
+**Part 2- Observational Estimation**
+
+```{r}
+# MODEL 1 : Naive Regression using Binary Treatment
+model_net <- lm(dengue_risk ~ net, data = data_dengue_net_v2)
+
+# MODEL 2 : Naive Regression using Count Treatment
+model_net_num <- lm(dengue_risk ~ net_num, data = data_dengue_net_v2)
+
+stargazer(model_net, model_net_num,
+          type = "text",
+          title = "Table 3 :Naive Regressions",
+          header = FALSE,
+          font.size = "small", # Options: "small", "footnotesize", "scriptsize"
+          column.sep.width = "1pt")
+          
+```
+Model 1: Binary Treatment (net)
+Coefficient: $-18.462$.
+Interpretation: On average, households that use a mosquito net have a dengue risk score that is 18.46 units lower than households that do not use a net.
+Significance: This effect is highly statistically significant ($p < 0.01$), as indicated by the three asterisks.
+
+Model 2: Count Treatment (net_num)Coefficient: $-7.671$.
+Interpretation: For every additional mosquito net used by a household, the dengue risk score decreases by an average of 7.67 units.
+Significance: This effect is also highly statistically significant ($p < 0.01$).
+
+Comparing the Two Models Explanatory Power ($R^2$):
+The binary model (Model 1) has a slightly higher $R^2$ of 0.331 compared to the count model's 0.294. This suggests that the simple "Yes/No" decision to use a net explains a bit more of the variation in dengue risk than the specific number of nets does in this unadjusted context.
+
+Scale of Impact:The binary coefficient (-18.46) is roughly 2.4 times larger than the count coefficient (-7.67). This makes sense logically: the binary coefficient captures the total average drop for moving from not using nets to using nets. 
+
+The "Naive" Nature of these Estimates: These are unadjusted (naive) estimates as we have not yet controlled for our confounders, i.e, income_rupee, health, or household size. The coefficients likely suffer from Selection Bias. The 18.46-point/ -7.671 point drop is not purely the "effect of the net"; it also reflects the fact that net users are naturally wealthier and healthier and belong to bigger households.
+
+```{r}
+# MODEL 3 : Controlling for Confounders
+model_net_adj <- lm(dengue_risk ~ net + income_rupee + health + household, data = data_dengue_net_v2)
+
+# MODEL 4 : Controlling for Confounders
+model_net_num_adj <- lm(dengue_risk ~ net_num + income_rupee + health + household, data = data_dengue_net_v2)
+
+# MODEL 5 : Controlling for Confounders and Environmental Variables
+model_net_adj_env <- lm(dengue_risk ~ net + income_rupee + health + household + temperature + resistance + rainfall, data = data_dengue_net_v2)
+
+# MODEL 6:Controlling for Confounders and Environmental Variables
+model_net_num_adj_env <- lm(dengue_risk ~ net_num + income_rupee + health + household + temperature + resistance + rainfall, data = data_dengue_net_v2)
+
+
+
+# Generating the table
+model_list4<- list(
+  "Binary Adj"=model_net_adj,
+  "Count_Adj"=model_net_num_adj,
+  "Binary Full"=model_net_adj_env,
+  "Count Full"=model_net_num_adj_env
+)
+modelsummary(model_list4, 
+          
+          title = "Adjusted and Full Regressions",
+          stars = TRUE,
+          covariate.labels = c("Net Use (D)", "Number of Nets", "Income", 
+                               "Health", "HH Size", "Temp", 
+                               "Resistance", "Rainfall"),
+          dep.var.labels = "Dengue Risk Score",
+          model.numbers = TRUE,
+          star.cutoffs = c(0.05, 0.01, 0.001), # Standard academic thresholds
+          notes.append = TRUE,
+          column.sep.width = "1pt")
+
+```
+1. Changes in Estimated Treatment Effect
+When moving from the Naive OLS to the Adjusted OLS, the treatment effect "shrinks" and remains significant.
+
+Binary Treatment: The coefficient changed from -18.46 (Naive) to -9.867 (Adjusted).
+
+Count Treatment: The coefficient changed from -7.67 (Naive) to -4.858 (Adjusted).
+
+Why it changed: The naive model suffered from Omitted Variable Bias. Part of the "reduction" in dengue risk was being falsely attributed to nets when it was actually caused by the higher income, health  and more number of household members of the users. Once adjusted, we see the "cleaner" isolated impact of the nets.
+
+2. Interpretation of the Adjusted Coefficient
+Binary (Net Use): Holding income, health, and household size constant, using a mosquito net reduces the dengue risk score by 9.87 units on average.
+
+Count (Number of Nets): Holding all other factors constant, each additional net used reduces the risk score by 4.86 units.
+
+3. Adding Environmental Variables (Full Models)
+Effect on Point Estimate: Adding Temp, Resistance, and Rainfall (Model 3 vs. Model 1) results in almost zero change to the treatment effect (-9.867 vs -9.850). For Model 2 vs Model 4 similarly almost sero change in the treatment effect (-4.858 vs -4.821)
+
+Reason: As identified in our DAG, these are Exogenous Controls. Since they are not correlated with the decision to use a net, they do not change the bias.
+
+Effect on Standard Error: The standard error for Net Use decreases from 0.320 to 0.269.
+
+Reason: These variables explain a large portion of the "noise" in dengue risk. By accounting for them, the model becomes more precise, resulting in tighter confidence intervals (lower standard errors).
+
+
+Assumptions for Causal Interpretation
+For these adjusted OLS estimates to be interpreted as Causal, the following assumptions must hold:
+
+1)Conditional Independence Assumption (CIA) / Unconfoundedness: We must assume that all variables that simultaneously affect net use and dengue risk are included in our control set. We assume there are no "unobserved" confounders.When conditioned for the confounders, the treatment is almost as good as randomly assigned.
+
+2)Overlap / Common Support: There must be both net users and non-users across all levels of income, health, household so we can make valid comparisons.
+
+These together constitute Strong Ignorability
+
+**Matching**
+The following kinds of Matching are performed:
+**Nearest Neighbourhood Matching Using Mahalanobis Distance with Replacement**
+
+```{r}
+install.packages("MatchIt")
+ library(MatchIt)
+# 1. Estimate the match using Mahalanobis distance with replacement
+ # We use 'net' as the treatment and our confounders as predictors
+ m_nn_mahal_rep <- matchit(net ~ income_rupee + household + health, 
+                       data = data_dengue_net_v2, 
+                       method = "nearest", 
+                       distance = "mahalanobis",
+                       replace = TRUE) 
+ 
+ # 2. Create a matched dataset
+ # This 'prunes' the data to only include the matched pairs
+ data_dengue_net_v2_matched_mahal_rep <- match.data(m_nn_mahal_rep)
+ head(data_dengue_net_v2_matched_mahal_rep)
+ summary(m_nn_mahal_rep)
+install.packages("cobalt")
+ library(cobalt)
+ love.plot (m_nn_mahal_rep,
+           stats = "mean.diffs",
+           threshold = 0.1,
+           abs = TRUE,
+           title = "Covariate Balance: Before vs After NN Matching" )
+ 
+```
+
+
+1. Initial Imbalance (Before Matching)
+
+income_rupee: The Standardized Mean Difference (SMD) is very high at 0.5718. In academic standards, any SMD > 0.1 is considered a sign of poor balance.
+
+health: Similarly, health is highly imbalanced with an SMD of 0.5316.
+
+household : household is highly imbalanced with an SMD of 0.3373
+
+Conclusion: Before matching,there is covariate imbalance. Net Users are wealthier, healthier, and live in larger households as also shown by summary statistics initially.
+
+2. Post-Matching Balance (Mahalanobis Distance)
+The improvement in covariate imbalance is dramatic:
+
+SMD Reduction: The SMDs for all three variables have dropped below the 0.1 threshold, 0.0216 for income_rupee, 0.0114 for household and 0.0247 for health. This indicates that, on average, the Net users and Non Users groups are now nearly identical.
+
+The Love Plots shows the same results with the absolute SMDs on the x axis and variable names on the y axis.
+
+**Propensity Score Matching**
+A major requirement for matching is the existance of a Common Support.
+
+To check for common support (overlap) across multiple covariates simultaneously—especially when we want to see how they interact across different "strata" of the population—we need to move beyond simple 1D density plots.
+
+The most robust way to do this is by using the Propensity Score as a summary metric.
+
+1. The Propensity Score: The "All-in-One" Metric
+
+The propensity score is the probability of a household using a net given their income, health, and size. If the distributions of these scores for users and non-users overlap, we have "Joint Common Support."
+
+```{r}
+# 1. Estimate the Propensity Score using a Logistic Regression
+ps_model <- glm(net ~ income_rupee + health + household, 
+                family = binomial(), data = data_dengue_net_v2)
+
+# 2. Add the scores to your dataframe
+data_dengue_net_v2$pscore <- predict(ps_model, type = "response")
+
+# 3. Visual check for Joint Overlap
+library(ggplot2)
+ggplot(data_dengue_net_v2, aes(x = pscore, fill = factor(net))) +
+  geom_histogram(alpha = 0.5, position = "identity", bins = 30) +
+  labs(title = "Joint Common Support Check",
+       x = "Propensity score", fill = "Net Use") +
+  theme_minimal()
+```
+These distributions have a good overlap, therefore matching seems quite possible.
+
+```{r}
+# 1. Estimate the match using propensity scores with replacement
+ # We use 'net' as the treatment and our confounders as predictors
+ m_nn_rep <- matchit(net ~ income_rupee + household + health, 
+                     data = data_dengue_net_v2, 
+                     method = "nearest", 
+                     distance = "glm",
+                     replace = TRUE ,caliper = 0.01) # This calculates the propensity score
+ 
+ # 2. Create a matched dataset 
+ # This 'prunes' the data to only include the matched pairs
+ data_dengue_net_v2_matched_rep <- match.data(m_nn_rep)
+ 
+ summary(m_nn_rep)
+ love.plot (m_nn_rep,
+           stats = "mean.diffs",
+           threshold = 0.1,
+           abs = TRUE,
+           title = "Covariate Balance: Before vs After Propensity Score Matching")
+ 
+```
+1. Initial Imbalance (Before PSM)
+The "Before" table reveals a sample where net users and non-users are vastly different:
+
+Distance (Propensity Score): The Standardized Mean Difference (SMD) for the distance itself is 0.7726. This represents a massive "selection" effect; the probability of using a net is fundamentally higher for certain types of people.
+
+Covariates: Income (SMD = 0.5718) and Health (SMD = 0.5316) and household (0.3373) are highly imbalanced. In academic research, any SMD > 0.1 is considered a failure of balance.
+
+2. Post-Matching Balance (After PSM)
+The "After" table shows that Caliper matching on the propensity score has largely corrected these biases:
+
+Distance Alignment: The SMD for the propensity score (distance) dropped from 0.7726 to 0.0001. 
+Covariate SMDs: All variables are now well within the acceptable range (SMD < 0.1):
+Income: Dropped to 0.0338.
+Health: Dropped to 0.0081.
+Household Size: Dropped to -0.0521.
+The Love Plots shows the same results with the absolute SMDs on the x axis and variable names on the y axis.
+
+**Treatment Effect Estimate from the 2 Methods**
+
+```{r}
+#Run the regression to find the ATE after mahalanobis matching with replacement
+ # dengue_risk is your outcome, net is your treatment
+ ate_model_mahal_rep <- lm(dengue_risk ~ net, data = data_dengue_net_v2_matched_mahal_rep)
+ 
+ #View the estimate
+ summary(ate_model_mahal_rep)
+ 
+ # Run the regression to find the ATE after propensity score matching with replacement
+ # dengue_risk is your outcome, net is your treatment
+ ate_model_rep <- lm(dengue_risk ~ net, data = data_dengue_net_v2_matched_rep)
+ 
+ #View the estimate
+ summary(ate_model_rep)
+ 
+library(stargazer)
+
+# Side-by-side comparison of the two matching estimators
+ 
+ model_list5 <- list(
+  "NNMahalanobis" = ate_model_mahal_rep,
+  "Propensity Score"  = ate_model_rep
+)
+modelsummary(model_list5, 
+          stars = TRUE,
+          title = "ATE from Matching",
+          covariate.labels = c("Net Use (Treatment)"),
+          dep.var.labels = "Dengue Risk Score",
+          model.numbers = TRUE,
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          notes = "Matched on Income, Health, and HH Size.",
+          column.sep.width = "1pt")
+
+```
+Interpretation of Coefficients:
+
+Nearest Neighbor (Mahalanobis Distance)Effect: -13.657. After matching households based on individual similarities in income, health, and household size, using a mosquito net is estimated to reduce the dengue risk score by 13.66 units on average.
+
+Propensity Score Matching Effect: -12.480. After matching households based on their overall probability of using a net, the treatment is estimated to reduce the risk score by 12.48 units.
+
+Statistical Significance :Both results are highly significant ($p < 0.001$), as indicated by the three asterisks (***).
+
+Why do different matching procedures give different estimates?
+
+We observed that Mahalanobis Distance Matching yielded an estimate of -13.66, while Propensity Score Matching (PSM) yielded -12.48. 
+
+Why the Estimates Differ
+The variation in ATE results could be driven by:
+
+Weighting of Covariates:  Mahalanobis treats each covariate (Income, Health, HH Size) as equally important. It looks at the scale invariant distance metric in a multi-dimensional space.
+
+Propensity Score reduces all covariates into a single scalar (the probability of treatment). 
+
+The "Curse of Dimensionality": Mahalanobis Matching can struggle if there are too many variables because it becomes harder to find a close match in every dimension simultaneously. PSM avoids this by collapsing the dimensions, which often leads to better overall balance but potentially worse matches for specific households.
+
+Number of Observations Used: PSM model used 1,122 observations, while Mahalanobis used 1,205.By discarding more "extreme" households that couldn't find a match in terms of probability, PSM changed the composition of the sample, which changes the average effect.
+
+**Preferred Procedure**
+For this specific dataset on mosquito nets, Mahalanobis Distance Matching is likely the preferred choice.
+
+Superior Covariate Balance: From balance tables, Mahalanobis Matching achieves lower SMDs for all 3 covariates.
+
+Sample Size Retention: Mahalanobis was able to find matches for more households (1,205) than PSM (1,122). This suggests it was better at navigating the data without losing as much information, which improves the External Validity of your result.
+
+Theoretical Fit: Since only three primary confounders (Income, Health, HH Size) are there, the "Curse of Dimensionality" is not a major threat here.
+
+**Inverse Probability Weighting**
+
+Intuition:
+- Treated units with low pscore (unlikely to be treated) get high weight
+- Control units with high pscore (likely to be treated) get high weight
+- Reweights sample to look like the population
+- Creates a “pseudo-population” where treatment is independent of X
+
+```{r}
+#GENERATING IPW WEIGHTS
+data_dengue_net_v2$wt_ipw <- data_dengue_net_v2$net/data_dengue_net_v2$pscore + (1-data_dengue_net_v2$net)/(1-data_dengue_net_v2$pscore)
+# Check weight distribution
+summary(data_dengue_net_v2$wt_ipw)
+hist(data_dengue_net_v2$wt_ipw, main = "Distribution of IPW Weights", breaks = 50,
+xlab = "Weight", col = "lightblue")
+# Check for extreme weights
+quantile(data_dengue_net_v2$wt_ipw, probs = c(0.01, 0.05, 0.95, 0.99))
+```
+Weight Distribution Inspection :Mean weight: $1.994$Median weight: $1.702$Maximum weight: $10.801$Analysis:The distribution is right-skewed, which is typical for IPW. However,maximum weight of $10.8$ is relatively modest.Extreme observations can start to dominate the entire treatment effect and inflate standard errors.The 99th percentile is $5.57$. This means that only 1% of your sample has a weight between $5.57$ and $10.8$. Similarly only 1% of the sample has weight between $1.071$ and $1.1163$
+
+Decision on Trimming : No Trimming (or Minimal Trimming): Maximum weight is only $10.8$, no single observation is likely "overwhelming" the model. Trimming is a trade-off between bias and variance.Trimming reduces variance (stabler results) but introduces bias (ignoring the "hard-to-match" households).Not Trimming keeps the estimate unbiased. We go for minimal trimming.
+
+**Trimmming at the 1st and 99th Percentile**
+
+By trimming at both the 1st and 99th percentiles, we "clip" the extreme ends of our weight distribution to ensure that neither the households( below 1st percentile or above 99th percentile) exert an outsized influence on our Average Treatment Effect (ATE).
+
+```{r}
+# 1. Calculate the 1st and 99th percentile thresholds
+# Based on your previous output: 1% ~ 1.11, 99% ~ 5.57
+lower_bound <- quantile(data_dengue_net_v2$wt_ipw, 0.01)
+upper_bound <- quantile(data_dengue_net_v2$wt_ipw, 0.99)
+
+# 2. Create the trimmed weights column
+# Cap values below 1.11 at 1.11, and values above 5.57 at 5.57
+data_dengue_net_v2$wt_ipw_trimmed_both <- pmax(pmin(data_dengue_net_v2$wt_ipw, upper_bound), lower_bound)
+
+# 3. Verify the new distribution
+# Min should be ~1.11 and Max should be ~5.57
+summary(data_dengue_net_v2$wt_ipw_trimmed_both)
+
+# Check weight distribution
+summary(data_dengue_net_v2$wt_ipw_trimmed_both)
+hist(data_dengue_net_v2$wt_ipw_trimmed_both, main = "Distribution of trimmed IPW Weights", breaks = 50,
+xlab = "Weight", col = "lightblue")
+```
+
+
+```{r}
+ipw_model <- lm(dengue_risk ~ net, data = data_dengue_net_v2, weights = data_dengue_net_v2$wt_ipw  )
+ipw_model_trimmed <- lm(dengue_risk ~ net, data = data_dengue_net_v2, weights = data_dengue_net_v2$wt_ipw_trimmed_both)
+
+model_list6<- list(
+  "IPW"=ipw_model,
+  "IPWTrimmed"=ipw_model_trimmed
+)
+
+# Generating the side-by-side table
+modelsummary(model_list6,
+             stars = TRUE,
+            title = "ATE from IPW and IPW trimmed",
+          column.labels = c("Standard IPW", "Trimmed (1%-99%)"),
+          covariate.labels = c("Net Use (ATE)"),
+          dep.var.labels = "Dengue Risk Score",
+          model.numbers = TRUE,
+          star.cutoffs = c(0.05, 0.01, 0.001),
+         notes = "Weights calculated via Propensity Score; Trimmed at 1st and 99th percentiles.",
+         column.sep.width = "1pt")
+```
+Interpretation of the Treatment Effect
+Standard IPW: The coefficient for Net Use is -9.837. This means that in the re-weighted pseudo-population (where users and non-users are balanced), using a net reduces the dengue risk score by 9.84 units on average.
+
+Trimmed IPW: After capping the extreme 1% and 99% weights, the effect is -10.199. This suggests that after removing the disproportionate influence of "atypical" households, the estimated benefit of the nets is slightly higher (10.2 units).
+
+Coefficient Shift: The effect becomes more negative (-9.84 to -10.20). This indicates that the extreme observations (those with weights up to 10.8) were slightly "masking" the true average effect. By trimming, a more stable and representative estimate is achieved.
+
+Reduction in Standard Error: The standard error dropped from 0.665 to 0.659. Even though it is a small change, it confirms that trimming extreme weights reduces variance, making your result more statistically precise.
+
+**Master Table for all results**
+```{r}
+# Ensure all matching/IPW models are extracted as standard formula objects
+# If using MatchIt, ensure you used: model <- lm(y ~ treat, data = matched_data, weights = weights)
+
+models_list7 <- list(
+  "Naive B" = model_net, 
+  "Naive C" = model_net_num, 
+  "Adj B" = model_net_adj, 
+  "Adj C" = model_net_num_adj, 
+  "Env B" = model_net_adj_env, 
+  "Env C" = model_net_num_adj_env, 
+  "Mahal" = ate_model_mahal_rep, 
+  "PSM" = ate_model_rep, 
+  "IPW" = ipw_model, 
+  "IPW Trim" = ipw_model_trimmed
+)
+
+# Use stargazer with the list
+modelsummary(models_list7,
+          type = "text",
+          stars = TRUE,
+          coef_map = c("net" ="Net Use",
+                       "net_num" = "Num of Nets"),
+          title = "Master Table from all regressions")
+         
+```
+Naive Estimates (1-2): Show the strongest apparent effect, with a coefficient of -18.462 for binary net use.
+
+Adjustments (3-6): The effect "shrinks" significantly to approximately -9.8 once income, health, and household size are included. Adding environmental variables (5-6) barely changes the point estimate but improves precision (smaller standard errors).
+
+Matching and Weighting (7-10): The estimates remain in a consistent range (-9.8 to -13.6). Interestingly, the matching models (Mahal and PSM) show a slightly larger effect than the adjusted OLS, suggesting that when we compare strictly similar households, the net's benefit is even more pronounced.
+
+The gap between the Naive Estimate (-18.462) and the Adjusted Estimate (-9.867) is roughly 8.6 units.
+
+Direction of Confounding: There is a Strong Positive Bias in the naive estimate. In this context, "positive bias" means the naive correlation was overstating the effectiveness of the nets.
+
+Economic Interpretation: Wealthier and healthier households  with more size are more likely to use nets and also less likely to get dengue.
+
+**Part 3 - Critical Reflection**
+
+(a) To make the estimates above causal, the following assumptions must hold:
+
+1) Strong Ignorability
+i) Unconfoundedness/CIA : This assumes that once we have accounted for (controlled for) income, household size, and baseline health, the decision to use a mosquito net is effectively random.
+ii) Common Support (Overlap) : This assumes that for every type of person in our data (e.g., a specific income level, health status and household size), there are some people who chose to use a net and some who did not.
+
+2) SUTVA (Stable Unit treatment Value Assumption): A household's dengue risk is affected only by its own net use and not by its neighbours' net use  (no externalities)
+
+Credibility Assessment
+Common Support
+With a sample size of 1,752 households, it is highly likely that we have plenty of "overlap." Even within specific income brackets, there is usually enough variation in personal choice or local availability that we can find households with similar observables where some use nets and others don't.
+
+CIA
+This is the most "fragile" assumption. It is very difficult to believe that "Risk Aversion" or "Proactive Health Behavior" isn't a factor.
+Eg.A "health-conscious" mother might buy a net and also ensure her children don't play near stagnant water.
+If this is true, the net "steals the credit" for the mother's other hygiene habits.  OLS estimate overstates the effectiveness of the net in this case (Positive Selection Bias).
+
+SUTVA
+Likely violated in village settings, if many neighbours use nets, local mosquito population may decrease(general equilibrium effects), providing herd protection to those without nets.
+
+(b) Remaining Threats to Identification
+
+1)Unobserved Confounders (Omitted Variable Bias)
+The most significant threat is the presence of factors that influence both the decision to use a net and the risk of dengue but are not in our dataset.
+Eg. Risk Aversion / Health-Seeking Behavior: A household that is naturally more cautious might buy a net and also ensure their children don't play near stagnant water or wear long sleeves at dusk. 
+
+2) Selection on Unobservables (Selection on Gains)
+In Part 2, we assume that people don't choose to use a net based on factors you can't see. In reality some households may have a genetic or biological predisposition to severe reactions to mosquito bites. These households are more likely to "select into" net use because their personal "gain" from the net is higher than the average household's.
+
+Knowledge and Education: While you control for income, you may not be fully capturing functional literacy or specific knowledge about dengue transmission. Highly informed households will use nets more effectively (tucking them in correctly, repairing holes), which your binary "Yes/No" variable cannot capture.
+
+3)Features of the Data that Give Pause
+Measurement Error in "Health": The baseline health variable is likely self-reported or a proxy. If it is "noisy" (inaccurate), it fails to fully "soak up" the confounding effect of, leaving residual bias in your net estimate.
+
+The "Net Use" Definition: The data asks if they "use" a net, but not how they use it. If people in the "treatment group" use the net inconsistently, our estimate is a "diluted" version of the true biological effect.
+
+(c) Alternate Research Design
+To reach a truly causal conclusion, a Randomized Control Trial (RCT) would be the gold standard, as it eliminates selection bias by design. Alternatively, collecting longitudinal panel data would allow us to control for unobserved, time-invariant household characteristics through fixed effects, significantly reducing the threat of omitted variable bias that persists in our current cross-sectional analysis
+
+
+**Part 4 - Programme Evaluation and Instrumental Variable**
+(a)Evaluating the government programme (Intent to Treat) is not the same question as estimating the effect of net use (ATE/LATE).
+
+ITT (Intent-to-Treat) gives the average effect of being eligible for the program on dengue risk, regardless of whether a household actually used a net.	The entire population , who is offered the programme, is covered. This includes even those who ignored the programme. It is identified by the reduced form and is always causal under the independence assumption alone.
+
+LATE (Local Average Treatment Effect)	The effect of net use specifically for the "Compliers"—the households who used a net only because the program made them eligible. It excludes "Always-takers" and "Never-takers." The assumption of monotonicity ensures that there are no defiers. Without monotonicity complier effects are cancelled by defier effects making a clean interpretation difficult. Therefore, the "Local" in LATE refers to the fact that the estimate is specific to the sub-population whose behavior was actually moved by the government's intervention.
+
+ATE (Average Treatment Effect) :The average effect of using a net on entire population. This is a theoretical average. The earlier models (OLS and IPW) found this out.
+
+In this problem, the IV estimator recovers the LATE. The government program (Eligibility) acts as an instrument. It only changes the behavior of the Compliers. The IV ignores Always-takers (who use nets regardless of the program) because their treatment status doesn't change based on the instrument.
+It also ignores Never-takers (who refuse nets regardless) because they never receive the treatment. MOnotonicity also holds. It is psychologically and economically unlikely that someone would reject a health-saving device simply because it was provided or subsidized by the state, especially if they were already willing to pay for it themselves.
+ 
+(b) Conditions for Instrument Validity 
+
+1)Relevance: The instrument ($Z$) must be correlated with the treatment ($D$). Being eligible for the government programme must actually change a household's probability of using a mosquito net ($Cov(Eligibility, Net) \neq 0$).If the programme provides subsidies, free distribution, or education, eligible households are far more likely to adopt nets than those who are ineligible and must pay full market price.
+
+2)Instrument Exogeneity (Exclusion Restriction + Independence) : The instrument must be "as good as random" and affect the outcome only through the treatment. Specifically, $Eligibility$ must have no direct effect on $Dengue\_Risk$, nor can it be correlated with any unobserved factors that affect risk ($Cov(Eligibility, \epsilon) = 0$). Here,eligibility is not random—it is a deterministic function of Income and Household Size. This creates a major threat to the exclusion restriction. As seen earlier,higher Income allows for better housing and nutrition (reducing risk), and Household Size affects the density of potential hosts (increasing/decreasing risk). Since $Income$ and $HH\_Size$ directly affect $Dengue\_Risk$, the instrument ($Eligibility$) is "tainted." It affects the outcome through paths other than just net use. Eligibility is an Unconditional Invalid Instrument
+
+We Restore Validity through Conditional Exogeneity, making Eligibility a Conditionally Valid Instrument. We control for (condition on) the running variables—Income and Household Size—inside the IV model. Once we hold income and size constant, the "jump" into eligibility becomes a source of Exogenous Variation. We are essentially comparing two households with nearly identical incomes and sizes, where one is just inside the eligibility cutoff and the other is just outside. At that specific boundary, the difference in their dengue risk should only be due to the net provided by the programme.
+
+If there are no other unobserved factors affecting both Dengue Risk and Eligibility, the exclusion restriction is satisfied.
+
+Potential Violations: If the government programme also provided mosquito coils or medical check-ups alongside the nets to eligible families, the exclusion restriction is violated. The "Eligibility" would be reducing dengue through multiple treatments, not just the net.If the exclusion restriction is only approximately satisfied IV estimate will be biased.
+
+(c) Testing the First Stage
+
+```{r}
+install.packages("aod")
+ # Load necessary libraries
+ library(aod) # For wald.test
+  data_dengue_net_v2$eligible_HH_numeric <- ifelse(data_dengue_net_v2$eligible_HH == TRUE, 1, 0)
+ # 1. Run the Probit First Stage
+ # 'net' is the endogenous treatment, 'eligible_HH' is the instrument
+ probit_first_stage <- glm(net ~ eligible_HH_numeric + income_rupee + household + health, 
+                           family = binomial(link = "probit"), 
+                           data = data_dengue_net_v2)
+ 
+ # 2. Display the summary to see the coefficient for 'eligible_HH'
+ summary(probit_first_stage)
+ 
+ # 3. Calculate the Wald Statistics (equivalent to F-test for GLM)
+ # We test the hypothesis that the coefficient of 'eligible_HH' is zero
+ wald_test <- wald.test(b = coef(probit_first_stage), 
+                        Sigma = vcov(probit_first_stage), 
+                        Terms = 2) # Assuming 'eligible_HH' is the 2nd term (after intercept)
+ 
+ print(wald_test)
+ 
+```
+Coefficient on Eligibility is  1.771 with Standard Error: 0.134 and is highly significant. 
+
+The instrument is Strong. For non-linear models like Probit, as above, the Wald $\chi^2$ test is the equivalent to the F test.Chi-squared ($\chi^2$) statistic of 174.4, which is far above the conventional threshold. This indicates that programme eligibility is a very powerful predictor of net adoption.
+
+Consequences of Using a Weak Instrument 
+If the instrument were weak, we can face : 
+Inconsistency and Bias: A weak instrument can actually amplify  bias, if it exists, rather than fixing it. It can be even more biased than the original "Naive" OLS. Standard errors for IV estimates are already larger than OLS. With a weak instrument, the standard errors "blow up," making the confidence intervals so wide that the results become statistically useless.
+
+(d) The 2SLS vs 2SRI vs Adjusted OLS Model
+While performing IV regressions Control Function Approach should be used since our treatment variable is binary. Therefore , we have performed the 2 Stage Residual Inclusion
+
+```{r}
+install.packages("AER")
+ library(AER)
+ # Run the 2SLS Model
+ # Formula: Outcome ~ Endogenous_Treatment + Controls | Instrument + Controls
+ iv_model_2SLS <- ivreg(dengue_risk ~ net + income_rupee + household + health | 
+                     eligible_HH_numeric + income_rupee + household + health, 
+                   data = data_dengue_net_v2)
+ #Generate the diagnostic tests (Cragg Donald Test)
+ # Look for the "Weak instruments" row in the output
+ summary(iv_model_2SLS, diagnostics = TRUE)
+ 
+ # Run the 2SRI Model
+ # Step 1: First Stage (Probit)
+ # Predict the probability of using a net based on the instrument and controls
+ probit_first <- glm(net ~ eligible_HH_numeric + income_rupee + household + health, 
+                     family = binomial(link = "probit"), 
+                     data = data_dengue_net_v2)
+ 
+ # Step 2: Generate the Control Function (Residuals)
+ # For a binary treatment, we use the 'generalized residuals'
+ # If net = 1: dnorm(z)/pnorm(z)
+ # If net = 0: -dnorm(z)/(1-pnorm(z))
+ z_score <- predict(probit_first, type = "link")
+ prob_hat <- predict(probit_first, type = "response")
+ 
+ data_dengue_net_v2$fs_residuals <- ifelse(data_dengue_net_v2$net == 1, 
+                           dnorm(z_score) / pnorm(z_score), 
+                           -dnorm(z_score) / (1 - pnorm(z_score)))
+ 
+ # Step 3: Second Stage (Outcome Model)
+ # Regress dengue_risk on the actual net variable AND the residuals
+ iv_2SRI <- lm(dengue_risk ~ net + income_rupee + household + health + fs_residuals, data = data_dengue_net_v2)
+ 
+ # Step 4: View Results
+ summary(iv_2SRI)
+ 
+# If not installed: 
+install.packages("modelsummary")
+library(modelsummary)
+
+# 1. Create a named list of your models
+# This automatically sets the column headers in the table
+model_list8 <- list(
+  "OLS (Binary)" = model_net_adj_env,
+  "OLS (Count)"  = model_net_num_adj_env,
+  "2SLS (IV)"    = iv_model_2SLS,
+  "2SRI (CF)"    = iv_2SRI
+)
+
+# 2. Generate the table
+# 'stars = TRUE' adds the significance asterisks (*, **, ***)
+# 'coef_map' cleans up variable names and keeps only what you want to see
+modelsummary(model_list8, 
+             stars = TRUE,
+             coef_map = c("net" = "Net Use (D)", 
+                          "net_num" = "Num of Nets",
+                          "income_rupee" = "Income",
+                          "household" = "HH Size",
+                          "health" = "Health",
+                          "imr_resid" = "1st Stage Residual (v)", # Name used in 2SRI
+                          "(Intercept)" = "Constant"),
+             gof_omit = "AIC|BIC|Log|RMSE",
+             title = "Comparison of OLS and IV Estimates")
+```
+As observed from the results of Cragg Donald test also, F value is much greater than 10 (indicating strong IV)
+
+The 2SLS estimate for Net Use ($D$) is -10.517. It is highly statistically significant at the 0.1% level ($p < 0.001$).This coefficient represents the Local Average Treatment Effect (LATE). For households whose net adoption was induced by the government programme (the Compliers), using a mosquito net reduces the average dengue risk score by 10.52 units. The 2SRI estimate for Net Use ($D$) is -11.245 and is significat at the 0.1% level.Higher than Adjusted OLS from(Part 2b) (-9.850). 
+
+The standard errors are also significantly larger (0.952 and 0.927 vs 0.269), which is expected as the IV only uses variation from compliers.
+
+Two Possible Explanations for the Difference 
+
+1): Unobserved Endogeneity (Negative Selection)The OLS estimate might have been biased toward zero (understating the effect).The Logic: If "vulnerable" households (those with higher unobserved environmental risk) are the ones who were most likely to participate in the government program and get a net, then the 2SLS/2SRI successfully "cleans" this negative correlation. Removing this bias reveals that the net is actually more effective than the naive OLS suggested.
+
+2) LATE vs. ATE (Local vs. Average Effect)The two models estimate different things.The Logic: The Adjusted OLS attempts to estimate the ATE (effect for the whole population), while 2SLS estimates the LATE (effect only for compliers). It is possible that the health benefits of nets are simply higher for the "Compliers"—perhaps because they live in higher-risk areas where the program was targeted—compared to the "Always-takers" who might have already had other protections in place.
+
+(e) Characterising Compliers
+
+Compliers are households whose net-using behavior is determined solely by the government programme.
+These are households that would not use a mosquito net if they had to pay market price, but do use a net when it is provided or subsidized by the government (Eligible).
+The complier share is equivalent to the coefficient on Eligibility on First stage. as there are no defiers.
+
+```{r}
+# 1. Run the Linear First Stage (LPM)
+# We must include the same controls used in your IV model
+first_stage_lpm <- lm(net ~ eligible_HH_numeric + income_rupee + household + health, 
+                      data = data_dengue_net_v2)
+
+# 2. Extract the coefficient for eligibility
+# This coefficient IS the estimated share of compliers in your sample
+summary(first_stage_lpm)
+
+# 3. Save the share as a percentage for your report
+complier_share <- coef(first_stage_lpm)["eligible_HH_numeric"]
+print(paste0("The Complier Share is: ", round(complier_share * 100, 2), "%"))
+```
+The IV results suggest that the LATE is larger than the ATE, indicating that the mosquito net intervention is particularly effective for the Compliers. Tjis significantly enhances the policy relevance of the study. It proves that the program is delivering the highest health returns to the most vulnerable sub-population, justifying the use of income and household size-based eligibility as an efficient targeting mechanism. Generally LATE can be larger, smaller, or equal to ATE.
+
+**Heterogeneous Treatment Effects**
+
+ Using 2SLS (IV) we explore whether the treatment effect is heterogeneous. To check whether The effect of mosquito net use on dengue risk differs across households — for example, by income level, household size, or baseline health, we construct 3 separate regressions by interacting net with each income, health and household separately. To avoid forbidden regressions, eligibility as also been interacted with these variables in the corresponding regressions as shown
+
+```{r}
+ #Heterogeneous Treatment Effects
+ iv_model_health <- ivreg(dengue_risk ~ net + income_rupee + health + household + net * health | eligible_HH_numeric + income_rupee + health + household + eligible_HH_numeric * health, data = data_dengue_net_v2)
+ summary(iv_model_health)
+ 
+ iv_model_income_rupee <- ivreg(dengue_risk ~ net + income_rupee + health + household + net * income_rupee | eligible_HH_numeric + income_rupee + health + household + eligible_HH_numeric * income_rupee, data = data_dengue_net_v2)
+ summary(iv_model_income_rupee)
+ 
+ iv_model_household <- ivreg(dengue_risk ~ net + income_rupee + health + household + net * household | eligible_HH_numeric + income_rupee + health + household + eligible_HH_numeric * household, data = data_dengue_net_v2)
+ summary(iv_model_household)
+ 
+ iv_model_multi <- ivreg(dengue_risk ~ net + income_rupee + health + household + net * household + net * income_rupee + net * health | eligible_HH_numeric + income_rupee + health + household + eligible_HH_numeric * household + eligible_HH_numeric * income_rupee + eligible_HH_numeric * health, data = data_dengue_net_v2  )
+ 
+ 
+
+
+# Wrap your models into a named list
+iv_models_list <- list(iv_model_health, 
+                       iv_model_income_rupee, 
+                       iv_model_household, 
+                       iv_model_multi)
+
+# Call stargazer using the list
+stargazer(iv_models_list, 
+          type = "text",
+          title = "Table 9:IV results Heterogeneous Effects",
+          column.labels = c("Health", "Income", "HH Size", "Multi"),
+          dep.var.labels = "Dengue Risk Score",
+          # IMPORTANT: Use 'keep' to prevent stargazer from looking at 'hidden' stats
+          keep = c("net", "net_num", "income", "health", "household"),
+          float.env = "sidewaystable",
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          column.sep.width = "1pt")
+```
+1. Interaction with Household Size (The Only Significant Driver)
+Model (3) shows a statistically significant interaction term: net:household = -2.813 (p < 0.05)*.
+For every additional person in the house, the "bonus" effect of using a net is an extra 2.8-unit reduction in dengue risk. In a large household, one net might protect multiple people sleeping together, or simply reduce the overall density of potential hosts for mosquitoes. The net is more effective in larger households.
+
+2. Interaction with Baseline Health
+Model (1) shows an interaction term: net:health = -0.155 (Not Significant).
+While the coefficient is negative, it lacks statistical significance (standard error is 0.116, nearly as large as the estimate).
+We cannot confidently say that the biological effectiveness of the net depends on how healthy the household was at the start of the study. The net appears to work equally well (or poorly) regardless of baseline health status.
+
+3. Interaction with Income
+Model (2) shows an interaction term: net:income_rupee = 0.00002 (Not Significant).This coefficient is effectively zero.
+This suggests that the marginal benefit of a net does not change based on wealth. A net used by a poor household provides the same health protection as one used by a wealthy household.
+
+4. The "Multi" Model (4): In Column (4), including all interactions simultaneously, almost all coefficients become statistically insignificant, and the main effect of net jumps to a positive 44.739.
+By including net, net:health, net:income, and net:household all at once, you are asking the model to split the "credit" for the net's effect into four overlapping buckets. Multicollinearity can be present.
+
+The massive standard error of 77.400 proves that Model (4) is over-specified and unreliable.
+
+To further check for heterogeneous treatment effects the income and health categories have been sub-divided as follows:
+
+```{r}
+ range(data_dengue_net_v2$income_rupee)
+ range(data_dengue_net_v2$health)
+ range(data_dengue_net_v2$household)
+ 
+ # 1. Create  3-level factor variables
+ # We use 33 and 66 as cut-off points for equal-sized brackets
+ data_dengue_net_v2$health_group <- cut(data_dengue_net_v2$health, 
+                        breaks = c(1, 33, 66, 100), 
+                        labels = c(0, 1, 2)) # 0=Low, 1=Med, 2=High
+ 
+ iv_model_health_group <- ivreg(dengue_risk ~ net + income_rupee + health + household + net * as.factor(health_group) | eligible_HH_numeric + income_rupee + health + household + eligible_HH_numeric * as.factor(health_group), data = data_dengue_net_v2)
+ summary(iv_model_health_group)
+ 
+ # 1. Create  3-level factor variables
+ # We use 7713 and 12856 as cut-off points for equal-sized brackets
+ data_dengue_net_v2$income_rupee_group <- cut(data_dengue_net_v2$income_rupee, 
+                                        breaks = c(2570, 7713, 12856 , 18000), 
+                                        labels = c(0, 1, 2)) # 0=Low, 1=Med, 2=High
+ 
+ iv_model_income_rupee_group <- ivreg(dengue_risk ~ net + income_rupee + health + household + net * as.factor(income_rupee_group) | eligible_HH_numeric + income_rupee + health + household + eligible_HH_numeric * as.factor(income_rupee_group), data = data_dengue_net_v2)
+ summary(iv_model_income_rupee_group)
+ 
+ 
+ 
+```
+As seen from the tables above the coefficient on net:as.factor(health_group)1 and net:as.factor(health_group)2 are insignificant indicating no health heterogeneity.
+For income heterogeneity by group, if we look at the Coefficients section, the interaction terms (net * income_rupee_group) are missing from the output. Only the main effects for the income groups are shown (Group 1 and Group 2).R's ivreg often drops interaction terms if the model is under-identified.
+
+From our test results,the effect of mosquito net use on dengue risk differ across households —by household size only. 
+
+Policy Recommendation :
+Shift from "Household" to "Density" Targeting
+A net used in a household of 8 people provides a significantly higher "marginal health return" than the same net used in a household of 2.
+The government should prioritize high-density households first. If resources are limited, a 6-person household just above the income threshold might actually be a better target for a subsidy than a 1-person household below it.
+
+The insignificance of net:income and net:health can actually be good news for the government.
+Nets do not require a "wealthy" environment or "perfect baseline health" to work. The government can deploy nets as a standalone tool without needing to bundle them with expensive nutrition or income-support programs. 
+
+
+
+
